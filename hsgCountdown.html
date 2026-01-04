@@ -8,71 +8,75 @@
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 
     <style>
-        body {
-            background:#f8f9fa;
+        html, body {
+            height:100%;
             margin:0;
+            background:#f8f9fa;
         }
 
-        /* ---------- Layout ---------- */
+        /* ---------- App ---------- */
         #app {
-            padding:1rem;
-            transition:.3s;
-        }
-
-        #app.running {
-            padding:0;
+            height:100%;
+            display:flex;
+            flex-direction:column;
         }
 
         /* ---------- Controls ---------- */
         .controls {
+            position:relative;
+            z-index:10;
             max-width:420px;
-            margin:0 auto 1rem;
+            margin:1rem auto;
             transition:.3s;
         }
 
         .controls.minimized {
-            max-width:200px;
-            opacity:0.6;
+            max-width:220px;
+            opacity:.7;
         }
 
         .controls.minimized #configInputs {
             display:none;
         }
 
-        .controls button {
-            font-size:0.9rem;
+        /* ---------- Timer Area ---------- */
+        #timerArea {
+            flex:1;
+            display:flex;
+            flex-direction:column;
+            align-items:center;
+            justify-content:center;
+            position:relative;
+            z-index:1;
+        }
+
+        /* ---------- Phase ---------- */
+        #phase {
+            font-size:2.4rem;
+            margin-bottom:1rem;
+        }
+
+        /* ---------- Timer Wrapper ---------- */
+        #timerWrapper {
+            position:relative;
+            width:1000px;
+            height:1000px;
+            max-width:90vmin;
+            max-height:90vmin;
         }
 
         /* ---------- Timer ---------- */
-        #timerArea {
-            text-align:center;
-        }
-
-        #timerWrapper {
-            position:relative;
-            width:440px;
-            height:440px;
-            margin:0 auto;
-            transition:.3s;
-        }
-
-        #app.running #timerWrapper {
-            width:100vw;
-            height:100vh;
-        }
-
         #timer {
             position:absolute;
             top:50%;
             left:50%;
             transform:translate(-50%,-50%);
-            font-size:8rem;
             font-weight:900;
+            letter-spacing:1px;
+            font-size:clamp(4rem, 20vmin, 15rem);
+            line-height:1;
+            white-space:nowrap;
             transition:.2s;
-        }
-
-        #app.running #timer {
-            font-size:22vw;
         }
 
         .training { color:#dc3545; }
@@ -80,11 +84,13 @@
 
         .warning {
             color:#b91c1c !important;
-            transform:translate(-50%,-50%) scale(1.1);
+            transform:translate(-50%,-50%) scale(1.08);
         }
 
         /* ---------- Progress Ring ---------- */
         svg {
+            width:100%;
+            height:100%;
             transform:rotate(-90deg);
         }
 
@@ -100,11 +106,6 @@
         #progress {
             stroke-linecap:round;
             transition:stroke-dashoffset .4s linear, stroke .2s;
-        }
-
-        #phase {
-            font-size:1.2rem;
-            margin-bottom:.5rem;
         }
     </style>
 </head>
@@ -130,7 +131,7 @@
             </div>
         </div>
 
-        <div class="d-flex gap-2 mt-2">
+        <div class="d-flex gap-2">
             <button id="startBtn" class="btn btn-success w-100">START</button>
             <button id="stopBtn" class="btn btn-danger w-100">STOP</button>
         </div>
@@ -141,7 +142,7 @@
         <div id="phase">Ready</div>
 
         <div id="timerWrapper">
-            <svg width="100%" height="100%" viewBox="0 0 440 440">
+            <svg viewBox="0 0 440 440">
                 <circle id="progressBg" cx="220" cy="220" r="190"/>
                 <circle id="progress" cx="220" cy="220" r="190"/>
             </svg>
@@ -152,9 +153,17 @@
 </div>
 
 <script>
-    let interval=null;
-    let time, phaseDuration, train, pause, rounds, round=1, training=true;
+    /* ---------- State ---------- */
+    let interval = null;
+    let isRunning = false;
 
+    let time, phaseDuration, train, pause, rounds;
+    let round = 1;
+
+    let phase = 'idle'; // idle | start | training | pause
+    const START_COUNTDOWN = 5;
+
+    /* ---------- Ring ---------- */
     const radius = 190;
     const circumference = 2 * Math.PI * radius;
 
@@ -164,12 +173,11 @@
 
     /* ---------- Audio ---------- */
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
     function beep(){
         const o = audioCtx.createOscillator();
         const g = audioCtx.createGain();
         o.frequency.value = 900;
-        g.gain.value = 0.15;
+        g.gain.value = 0.12;
         o.connect(g);
         g.connect(audioCtx.destination);
         o.start();
@@ -178,7 +186,7 @@
 
     /* ---------- Speech ---------- */
     function speak(n){
-        if(!('speechSynthesis' in window)) return;
+        if(!speechSynthesis) return;
         const u = new SpeechSynthesisUtterance(n.toString());
         u.lang = 'en-US';
         speechSynthesis.cancel();
@@ -187,7 +195,7 @@
 
     /* ---------- Helpers ---------- */
     function format(t){
-        return String(Math.floor(t/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0');
+        return String(Math.floor(t/60)).padStart(2,'0') + ':' + String(t%60).padStart(2,'0');
     }
 
     function updateProgress(){
@@ -196,79 +204,107 @@
     }
 
     function updateUI(){
+        let colorClass = 'pause';
+        let phaseText = '';
+
+        if(phase === 'start'){
+            colorClass = 'pause';
+            phaseText = 'Get Ready';
+        }
+        else if(phase === 'training'){
+            colorClass = 'training';
+            phaseText = `Training ${round}/${rounds}`;
+        }
+        else if(phase === 'pause'){
+            colorClass = 'pause';
+            phaseText = 'Pause';
+        }
+        else {
+            phaseText = 'Ready';
+        }
+
         $('#timer')
-            .text(format(time))
+            .text(format(time || 0))
             .removeClass('training pause')
-            .addClass(training?'training':'pause');
+            .addClass(colorClass);
 
-        $('#progress').css('stroke', training ? '#dc3545' : '#198754');
-        $('#phase').text(training ? `Training ${round}/${rounds}` : 'Pause');
+        $('#progress').css('stroke', colorClass === 'training' ? '#dc3545' : '#198754');
+        $('#phase').text(phaseText);
 
-        updateProgress();
+        if(time > 0) updateProgress();
     }
 
     /* ---------- Timer ---------- */
     function tick(){
+        if(!isRunning) return;
+
         time--;
 
         if(time <= 5 && time > 0){
             beep();
             speak(time);
             $('#timer').addClass('warning');
-            $('#progress').css('stroke','#b91c1c');
+            $('#progress').css('stroke','#198754');
         }
 
         if(time <= 0){
             $('#timer').removeClass('warning');
-            training = !training;
 
-            if(training){
+            if(phase === 'start'){
+                phase = 'training';
+                phaseDuration = train;
+                time = train;
+            }
+            else if(phase === 'training'){
+                phase = 'pause';
+                phaseDuration = pause;
+                time = pause;
+            }
+            else if(phase === 'pause'){
                 round++;
                 if(round > rounds){
                     stopTimer();
                     $('#phase').text('Finished 🎉');
                     return;
                 }
+                phase = 'training';
+                phaseDuration = train;
+                time = train;
             }
-
-            phaseDuration = training ? train : pause;
-            time = phaseDuration;
         }
 
         updateUI();
     }
 
+    /* ---------- Controls ---------- */
     function startTimer(){
+        if(isRunning) return;
+        isRunning = true;
+
         clearInterval(interval);
         audioCtx.resume();
 
-        train = +$('#trainTime').val();
-        pause = +$('#pauseTime').val();
+        train  = +$('#trainTime').val();
+        pause  = +$('#pauseTime').val();
         rounds = +$('#rounds').val();
 
         round = 1;
-        training = true;
-        phaseDuration = train;
-        time = train;
+        phase = 'start';
+        phaseDuration = START_COUNTDOWN;
+        time = START_COUNTDOWN;
 
-        $('#app').addClass('running');
         $('.controls').addClass('minimized');
-
-        document.documentElement.requestFullscreen().catch(()=>{});
-
         updateUI();
-        interval = setInterval(tick,1000);
+
+        interval = setInterval(tick, 1000);
     }
 
     function stopTimer(){
+        isRunning = false;
         clearInterval(interval);
 
-        $('#app').removeClass('running');
+        phase = 'idle';
         $('.controls').removeClass('minimized');
-
-        if(document.fullscreenElement){
-            document.exitFullscreen();
-        }
 
         $('#timer').text('00:00').removeClass('training pause warning');
         $('#progress').css('stroke-dashoffset', circumference);
@@ -276,8 +312,8 @@
     }
 
     /* ---------- Events ---------- */
-    $('#startBtn').click(startTimer);
-    $('#stopBtn').click(stopTimer);
+    $('#startBtn').on('click', startTimer);
+    $('#stopBtn').on('click', stopTimer);
 </script>
 
 </body>
