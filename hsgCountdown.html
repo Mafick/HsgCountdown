@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Interval Timer</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+
+    <style>
+        body {
+            background:#f8f9fa;
+            margin:0;
+        }
+
+        /* ---------- Layout ---------- */
+        #app {
+            padding:1rem;
+            transition:.3s;
+        }
+
+        #app.running {
+            padding:0;
+        }
+
+        /* ---------- Controls ---------- */
+        .controls {
+            max-width:420px;
+            margin:0 auto 1rem;
+            transition:.3s;
+        }
+
+        .controls.minimized {
+            max-width:200px;
+            opacity:0.6;
+        }
+
+        .controls.minimized #configInputs {
+            display:none;
+        }
+
+        .controls button {
+            font-size:0.9rem;
+        }
+
+        /* ---------- Timer ---------- */
+        #timerArea {
+            text-align:center;
+        }
+
+        #timerWrapper {
+            position:relative;
+            width:440px;
+            height:440px;
+            margin:0 auto;
+            transition:.3s;
+        }
+
+        #app.running #timerWrapper {
+            width:100vw;
+            height:100vh;
+        }
+
+        #timer {
+            position:absolute;
+            top:50%;
+            left:50%;
+            transform:translate(-50%,-50%);
+            font-size:8rem;
+            font-weight:900;
+            transition:.2s;
+        }
+
+        #app.running #timer {
+            font-size:22vw;
+        }
+
+        .training { color:#dc3545; }
+        .pause { color:#198754; }
+
+        .warning {
+            color:#b91c1c !important;
+            transform:translate(-50%,-50%) scale(1.1);
+        }
+
+        /* ---------- Progress Ring ---------- */
+        svg {
+            transform:rotate(-90deg);
+        }
+
+        circle {
+            fill:none;
+            stroke-width:18;
+        }
+
+        #progressBg {
+            stroke:#e5e7eb;
+        }
+
+        #progress {
+            stroke-linecap:round;
+            transition:stroke-dashoffset .4s linear, stroke .2s;
+        }
+
+        #phase {
+            font-size:1.2rem;
+            margin-bottom:.5rem;
+        }
+    </style>
+</head>
+
+<body>
+
+<div id="app">
+
+    <!-- CONTROLS -->
+    <div class="controls card p-3">
+        <div id="configInputs">
+            <div class="mb-2">
+                <label class="form-label small">Training (sec)</label>
+                <input id="trainTime" type="number" class="form-control form-control-sm" value="60">
+            </div>
+            <div class="mb-2">
+                <label class="form-label small">Pause (sec)</label>
+                <input id="pauseTime" type="number" class="form-control form-control-sm" value="40">
+            </div>
+            <div class="mb-2">
+                <label class="form-label small">Rounds</label>
+                <input id="rounds" type="number" class="form-control form-control-sm" value="5">
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 mt-2">
+            <button id="startBtn" class="btn btn-success w-100">START</button>
+            <button id="stopBtn" class="btn btn-danger w-100">STOP</button>
+        </div>
+    </div>
+
+    <!-- TIMER -->
+    <div id="timerArea">
+        <div id="phase">Ready</div>
+
+        <div id="timerWrapper">
+            <svg width="100%" height="100%" viewBox="0 0 440 440">
+                <circle id="progressBg" cx="220" cy="220" r="190"/>
+                <circle id="progress" cx="220" cy="220" r="190"/>
+            </svg>
+            <div id="timer">00:00</div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    let interval=null;
+    let time, phaseDuration, train, pause, rounds, round=1, training=true;
+
+    const radius = 190;
+    const circumference = 2 * Math.PI * radius;
+
+    $('#progress')
+        .attr('stroke-dasharray', circumference)
+        .attr('stroke-dashoffset', circumference);
+
+    /* ---------- Audio ---------- */
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    function beep(){
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.frequency.value = 900;
+        g.gain.value = 0.15;
+        o.connect(g);
+        g.connect(audioCtx.destination);
+        o.start();
+        o.stop(audioCtx.currentTime + 0.12);
+    }
+
+    /* ---------- Speech ---------- */
+    function speak(n){
+        if(!('speechSynthesis' in window)) return;
+        const u = new SpeechSynthesisUtterance(n.toString());
+        u.lang = 'en-US';
+        speechSynthesis.cancel();
+        speechSynthesis.speak(u);
+    }
+
+    /* ---------- Helpers ---------- */
+    function format(t){
+        return String(Math.floor(t/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0');
+    }
+
+    function updateProgress(){
+        const offset = circumference * (1 - time / phaseDuration);
+        $('#progress').css('stroke-dashoffset', offset);
+    }
+
+    function updateUI(){
+        $('#timer')
+            .text(format(time))
+            .removeClass('training pause')
+            .addClass(training?'training':'pause');
+
+        $('#progress').css('stroke', training ? '#dc3545' : '#198754');
+        $('#phase').text(training ? `Training ${round}/${rounds}` : 'Pause');
+
+        updateProgress();
+    }
+
+    /* ---------- Timer ---------- */
+    function tick(){
+        time--;
+
+        if(time <= 5 && time > 0){
+            beep();
+            speak(time);
+            $('#timer').addClass('warning');
+            $('#progress').css('stroke','#b91c1c');
+        }
+
+        if(time <= 0){
+            $('#timer').removeClass('warning');
+            training = !training;
+
+            if(training){
+                round++;
+                if(round > rounds){
+                    stopTimer();
+                    $('#phase').text('Finished 🎉');
+                    return;
+                }
+            }
+
+            phaseDuration = training ? train : pause;
+            time = phaseDuration;
+        }
+
+        updateUI();
+    }
+
+    function startTimer(){
+        clearInterval(interval);
+        audioCtx.resume();
+
+        train = +$('#trainTime').val();
+        pause = +$('#pauseTime').val();
+        rounds = +$('#rounds').val();
+
+        round = 1;
+        training = true;
+        phaseDuration = train;
+        time = train;
+
+        $('#app').addClass('running');
+        $('.controls').addClass('minimized');
+
+        document.documentElement.requestFullscreen().catch(()=>{});
+
+        updateUI();
+        interval = setInterval(tick,1000);
+    }
+
+    function stopTimer(){
+        clearInterval(interval);
+
+        $('#app').removeClass('running');
+        $('.controls').removeClass('minimized');
+
+        if(document.fullscreenElement){
+            document.exitFullscreen();
+        }
+
+        $('#timer').text('00:00').removeClass('training pause warning');
+        $('#progress').css('stroke-dashoffset', circumference);
+        $('#phase').text('Ready');
+    }
+
+    /* ---------- Events ---------- */
+    $('#startBtn').click(startTimer);
+    $('#stopBtn').click(stopTimer);
+</script>
+
+</body>
+</html>
